@@ -1,0 +1,165 @@
+version: "3.3"
+
+services:
+
+  # ------------
+  # Traefik 
+  # ------------
+  
+  traefik:
+    image: "traefik:v3.0"
+    container_name: "traefik"
+    command:
+    - "--api.insecure=true" 
+    - "--api.dashboard=true"
+    - "--entrypoints.web.address=:80"
+    - "--providers.docker=true"
+    - "--providers.docker.exposedbydefault=false"
+    ports:
+    - "80:80"
+    - "8080:8080" #http://localhost:8080/dashboard
+    volumes:
+    - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+    - traefik
+
+  # traefik - test service
+  whoami:
+    image: "traefik/whoami"
+    container_name: "whoami"
+    labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.whoami.rule=PathPrefix(`/whoami`)"
+      #    - "traefik.http.routers.whoami.rule=HostRegexp(`whoami.(?i)`)"
+    - "traefik.http.routers.whoami.entrypoints=web"
+    networks:
+    - traefik
+
+  # ------------
+  # Gitlab
+  # ------------
+  
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: "gitlab"
+    environment:
+      GITLAB_ROOT_PASSWORD: 'StrongPassword@'
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://anykey.pl/gitlab';
+        gitlab_rails['initial_root_password'] = 'StrongPassword@'
+        gitlab_rails['monitoring_whitelist'] = ['127.0.0.0/8', '::1/128', '192.168.0.1', '0.0.0.0/0']
+    ports:
+    - '2424:2424'
+    volumes:
+    - '${GITLAB_HOME-./data/gitlab}/config:/etc/gitlab'
+    - '${GITLAB_HOME-./data/gitlab}/logs:/var/log/gitlab'
+    - '${GITLAB_HOME-./data/gitlab}/data:/var/opt/gitlab'
+    - '${GITLAB_CONFIG-./config/gitlab}/init_gitlab.sh:/init_gitlab.sh:ro'
+    labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.gitlab.rule=PathPrefix(`/gitlab`)"
+    - "traefik.http.routers.gitlab.entrypoints=web"
+    - "traefik.http.routers.gitlab.service=gitlab"
+    - "traefik.http.services.gitlab.loadbalancer.server.port=80"
+    shm_size: '256m'    
+    networks:
+    - traefik
+    entrypoint: [ "/bin/bash", "-c" ]
+    command:
+    - "/assets/wrapper && /init_gitlab.sh"
+
+  # ------------
+  # Jenkins 
+  # ------------
+  
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    restart: always
+    user: "0"
+    ports:
+      - '50000:50000'
+    environment:
+      JAVA_OPTS: |
+        -Djenkins.install.runSetupWizard=false
+      JENKINS_OPTS: |
+        --httpPort=80
+        --prefix=/jenkins
+      JENKINS_PLUGINS: |
+        gitlab-plugin:latest
+        ant:latest
+        antisamy-markup-formatter:latest
+        build-timeout:latest
+        cloudbees-folder:latest
+        configuration-as-code:latest
+        credentials-binding:latest
+        email-ext:latest
+        git:latest
+        github-branch-source:latest
+        gradle:latest
+        ldap:latest
+        mailer:latest
+        matrix-auth:latest
+        pam-auth:latest
+        pipeline-github-lib:latest
+        pipeline-stage-view:latest
+        ssh-slaves:latest
+        timestamper:latest
+        workflow-aggregator:latest
+        ws-cleanup:latest
+        job-dsl:latest
+        blueocean:latest
+        authorize-project:latest
+      CASC_JENKINS_CONFIG: /var/jenkins_home/casc_configs
+      JENKINS_ADMIN_ID: "admin"
+      JENKINS_ADMIN_PASSWORD: "admin"
+      JENKINS_CASC_PATH: /var/jenkins_home/casc_configs/casc.yaml
+      JENKINS_CASC_BODY: |
+        credentials:
+          system:
+            domainCredentials:
+              - credentials:
+                  - gitLabApiTokenImpl:
+                      scope: SYSTEM
+                      id: gitlab_token
+                      apiToken: "${BIND_TOKEN}"
+                      description: "Gitlab Token"
+        unclassified:
+          location:
+            url: http://anykey.pl/jenkins
+          gitlabconnectionconfig:
+            connections:
+              - apiTokenId: gitlab_token
+                clientBuilderId: "autodetect"
+                connectionTimeout: 20
+                ignoreCertificateErrors: true
+                name: "my_gitlab_server"
+                readTimeout: 10
+                url: "https://gitlab.com/"
+        jenkins:
+          securityRealm:
+            local:
+              allowsSignup: false
+              users:
+               - id: admin 
+                 password: admin 
+    entrypoint: [ "/bin/bash", "-c" ]
+    command: 
+    - |
+      mkdir $${CASC_JENKINS_CONFIG};
+      echo "$${JENKINS_CASC_BODY}" > "$${JENKINS_CASC_PATH}";
+      jenkins-plugin-cli --plugins $${JENKINS_PLUGINS}; 
+      /usr/local/bin/jenkins.sh;
+    volumes:
+    - ${JENKINS_HOME-./data/jenkins}:/var/jenkins_home:rw
+    labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.jenkins.rule=PathPrefix(`/jenkins`)"
+    - "traefik.http.routers.jenkins.entrypoints=web"
+    - "traefik.http.routers.jenkins.service=jenkins"
+    - "traefik.http.services.jenkins.loadbalancer.server.port=80"
+    networks:
+    - traefik
+
+networks:
+  traefik: 
